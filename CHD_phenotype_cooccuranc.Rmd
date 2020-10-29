@@ -1,0 +1,177 @@
+---
+title: "CHD_Phenotype_Cooccurance"
+output: html_document
+---
+
+
+```{r}
+
+library(dplyr)
+library(ggplot2)
+```
+
+```{r}
+
+
+patient_table<-read.csv(file = "/home/lbondhus/Desktop/PROJECTS/CHD/intermediate_data/participant_table.tsv", sep = "\t")
+
+```
+
+
+
+```{r}
+pat_phenos <- strsplit(as.character(patient_table$Diagnosis..Mondo.), ",")
+
+
+phenotypes_per_patient <- length(pat_phenos)
+for(i in 1:length(pat_phenos)){
+  pat_phenos[[i]]<-unique(pat_phenos[[i]])
+  
+  phenotypes_per_patient[i]<-length(pat_phenos[[i]]) - length(which(pat_phenos[[i]]=="" ))
+}
+
+df<-data.frame(phenotypes_per_patient = phenotypes_per_patient[which(phenotypes_per_patient > 0)])
+png("phenotypes_per_patient.png")
+hist(phenotypes_per_patient[which(phenotypes_per_patient > 0)],
+     main="phenotypes per patient",
+     xlab="phenotypes per patient")
+#ggplot(df, aes(x=phenotypes_per_patient)) + 
+#  geom_histogram(binwidth = 0.5) + 
+#  theme(axis.text.x = element_text(size=12),
+#  axis.text.y = element_text(size=12),
+#  axis.title = element_text(size=14))
+dev.off()
+
+hist(phenotypes_per_patient)  
+write.csv(table(phenotypes_per_patient), "Phenotypes_per_patient.csv")
+
+phenotypes_count <- data.frame(table(unlist(pat_phenos)))
+phenotypes_count <- phenotypes_count[order(phenotypes_count$Var1),]
+phenotypes_count <- phenotypes_count[-which(phenotypes_count$Var1==""),]
+
+
+phenos <- as.vector(phenotypes_count$Var1)
+
+ 
+table(phenotypes_per_patient)
+
+write.csv(phenotypes_per_patient, "Phenotypes_per_patient")
+
+
+top_20<-top_n( phenotypes_count, 20)
+top_20 <- top_20[order(top_20$Freq, decreasing = TRUE),]
+
+write.csv(top_20, "top_20.csv")
+
+```
+
+
+```{r}
+paired_pheno_matrix <- matrix(0L, nrow=length(phenos),ncol=length(phenos))
+for(i in 1:length(phenos)){
+  for(j in 1:i){
+    if(i==j){next;}
+    for(k in 1:length(pat_phenos)){
+      if(length(pat_phenos[[k]])==0){next;}
+      if(is.element(phenos[i], pat_phenos[[k]]) & is.element(phenos[j], pat_phenos[[k]]) ){ paired_pheno_matrix[i,j] <- paired_pheno_matrix[i,j]+1;}
+    }
+  }
+}
+rownames(paired_pheno_matrix)<-phenos
+colnames(paired_pheno_matrix)<-phenos
+
+
+
+paired_pheno_matrix_2_full <- matrix(0L, nrow=length(phenos),ncol=length(phenos))
+for(i in 1:length(phenos)){
+  for(j in 1:length(phenos)){
+    if(i==j){next;}
+    for(k in 1:length(pat_phenos)){
+      if(length(pat_phenos[[k]])==0){next;}
+      if(is.element(phenos[i], pat_phenos[[k]]) & is.element(phenos[j], pat_phenos[[k]]) ){ paired_pheno_matrix_2_full[i,j] <- paired_pheno_matrix_2_full[i,j]+1;}
+    }
+  }
+}
+
+rownames(paired_pheno_matrix_2_full)<-phenos
+colnames(paired_pheno_matrix_2_full)<-phenos
+a <- paired_pheno_matrix_2_full[,which(is.element(rownames(paired_pheno_matrix_2_full), top_20$Var1 ))]
+colSums(a)
+
+colSums(a)
+ave_coocurrances <- colSums(paired_pheno_matrix_2_full) / phenotypes_count$Freq
+
+phenotypes_count$ave_coocurrences <- ave_coocurrances
+
+
+ write.csv( phenotypes_count[order(phenotypes_count$ave_coocurrences, decreasing = TRUE),][1:20,], "top_20_most_cooccurance.csv")
+
+ave_co <- ave_coocurrances[which(is.element(names(ave_coocurrances), top_20$Var1))]
+ave_co <- data.frame(names=names(ave_co), ave_num_coocurances = ave_co )
+ave_co <- ave_co[as.vector(top_20$Var1),]
+top_20$Average_Number_Cooccurances <- ave_co$ave_num_coocurances
+```
+
+```{r}
+which(paired_pheno_matrix > 22, arr.ind = TRUE)
+top_20_pair_rows <- which(paired_pheno_matrix > 22, arr.ind = TRUE)[,"row"]
+top_20_pair_cols <- which(paired_pheno_matrix > 22, arr.ind = TRUE)[,"col"]
+paste( row.names(paired_pheno_matrix)[top_20_pair_rows], ",", colnames(paired_pheno_matrix)[top_20_pair_cols])
+top_20_pair_values <- paired_pheno_matrix[which(paired_pheno_matrix > 22)]
+
+top_20_pairs <- data.frame(row.names(paired_pheno_matrix)[top_20_pair_rows], colnames(paired_pheno_matrix)[top_20_pair_cols], top_20_pair_values)
+
+top_20_pairs <- top_20_pairs[order(top_20_pairs$top_20_pair_values, decreasing = TRUE),]
+write.csv(top_20_pairs, "top_20_pairs.csv")
+
+```
+
+
+
+
+
+
+```{r}
+pairs <- list()
+for(i in 1:length(phenos)){
+  for(j in 1:i){
+    if(paired_pheno_matrix[i,j] < 3 ){next;}
+    pairs[[length(pairs)+1]] <- c(rownames(paired_pheno_matrix)[i], colnames(paired_pheno_matrix)[j])
+  }
+}
+length(unique(pairs))
+
+
+triple_matrix <- matrix(0L, nrow=length(phenos),ncol=length(pairs))
+rownames(triple_matrix) <- phenos
+pair_names <- vector(length = length(pairs))
+for(i in 1:length(pairs)){
+  pair_names[i]<- paste(pairs[[i]][1], pairs[[i]][[2]])
+}
+colnames(triple_matrix) <- pair_names
+
+
+for(i in 1:length(phenos)){
+  for(j in 1:length(pairs)){
+    if(is.element(phenos[i],pairs[[j]])){next;}
+    for(k in 1:length(pat_phenos)){
+      if(length(pat_phenos[[k]])==0){next;}
+      if(is.element(phenos[i], pat_phenos[[k]]) &
+         is.element(pairs[[j]][1], pat_phenos[[k]]) &
+         is.element(pairs[[j]][2], pat_phenos[[k]]) 
+         ){ triple_matrix[i,j] <- triple_matrix[i,j]+1;}
+    }
+  }
+}
+
+
+
+```
+
+
+
+```{r}
+max_doubles <- paired_pheno_matrix[which(paired_pheno_matrix>15, arr.ind = TRUE)[,1],which(paired_pheno_matrix>15, arr.ind = TRUE)[,2]]
+
+```
+

@@ -1,0 +1,97 @@
+---
+title: "CHD_phenotype_severity_annotation"
+author: "Leroy_Bondhus"
+date: "September 13, 2020"
+output: html_document
+---
+
+
+```{r}
+
+library(dplyr)
+library(ggplot2)
+```
+
+```{r}
+patient_table<-read.csv(file = "/home/lbondhus/Desktop/PROJECTS/CHD/intermediate_data/participant_table.tsv", sep = "\t")
+patient_table <- patient_table[which(patient_table$Proband=="Yes"),]
+
+results_dir <- "/home/lbondhus/Desktop/PROJECTS/CHD/results/"
+date<-Sys.Date()
+date<-format(date, format="%Y%m%d")
+```
+
+```{r}
+pat_phenos <- strsplit(as.character(patient_table$Diagnosis..Mondo.), ",")
+
+
+phenotypes_per_patient <- length(pat_phenos)
+for(i in 1:length(pat_phenos)){
+  pat_phenos[[i]]<-unique(pat_phenos[[i]])
+  
+  phenotypes_per_patient[i]<-length(pat_phenos[[i]]) - length(which(pat_phenos[[i]]=="" ))
+}
+
+
+
+phenotypes_count <- data.frame(table(unlist(pat_phenos)))
+phenotypes_count <- phenotypes_count[order(phenotypes_count$Var1),]
+phenotypes_count <- phenotypes_count[-which(phenotypes_count$Var1==""),]
+
+
+write.csv(phenotypes_count, paste(results_dir, date, "_Phenotypes_Count.csv", sep=""))
+
+```
+
+
+
+```{r}
+phen_w_severity<-read.csv(file = "/home/lbondhus/Desktop/PROJECTS/CHD/intermediate_data/phenotype_count_w_severity.csv")
+head(phen_w_severity)
+levels(phen_w_severity$severity) <- c(levels(phen_w_severity$severity), "unassigned")
+
+phen_w_severity[which(phen_w_severity$severity ==""),"severity"] <- "unassigned" 
+```
+
+
+
+```{r}
+## check phenotype names still match
+for(i in 1:length(pat_phenos)){
+  if(!all(is.element(pat_phenos[[i]],phen_w_severity$phen_name))){ ## if pat_phenos NOT found in phen_with_severity$phen_name print 
+    print(pat_phenos[[i]][which(!is.element(pat_phenos[[i]],phen_w_severity$phen_name))])
+  }#else{ print(paste("elements of",i,"are found"))}
+}
+
+pat_severity <- numeric(length = length(pat_phenos))
+
+phen_w_severity$severity
+phen_w_severity$severity_code <- phen_w_severity$severity
+levels(phen_w_severity$severity_code) <- c(0,1,2,3,2.5)   ## no heart phenotype information = 0, mild = 1, moderate = 2, severe = 3, unassigned heart = 2.5
+## thus  no_heart_info < mild < moderate < unassigned < severe. Since severe is max, makes intuitive sense that unassigned are at most severe, but don't want
+## to bin them with with mild or moderate.
+
+
+phen_w_severity$severity_code <- as.numeric(as.character(phen_w_severity$severity_code))
+phen_w_severity$severity_code[which(is.na(phen_w_severity$severity_code))] <- 0
+
+for(i in 1:length(pat_phenos)){
+  temp <- ""
+  if(length(pat_phenos[[i]])==0){pat_severity[i] <- 0; next;}
+  temp_phens <- phen_w_severity[which(is.element(phen_w_severity$phen_name, pat_phenos[[i]])),]
+  pat_severity[i] <- max(temp_phens$severity_code) 
+  
+}
+
+fps <- factor(pat_severity)
+levels(fps) <- c("no_cardiac_phenotype","mild","moderate","unassigned","severe" )
+fps
+patient_table$Severity <- fps
+
+
+
+
+```
+
+
+
