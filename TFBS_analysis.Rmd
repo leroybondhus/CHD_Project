@@ -1,0 +1,128 @@
+---
+title: "TF_binding_site_analysis"
+output: html_document
+---
+
+
+```{r}
+
+library("Biostrings")
+library("TFBSTools")
+library("JASPAR2016")
+library("BSgenome.Hsapiens.UCSC.hg38")
+
+```
+
+
+Read Table of de novo variants in cases and controls from Richter 2020
+```{r}
+case_dnvs <- read.csv(file = "/home/leroy/Desktop/PROJECTS/CHD/intermediate_data/41588_2020_652_MOESM3_ESM_Cases_DNVs.csv",
+                      stringsAsFactors = F)
+colnames(case_dnvs)<-case_dnvs[1,]
+case_dnvs<-case_dnvs[2:nrow(case_dnvs),]
+case_dnvs$Pos <- as.numeric(case_dnvs$Pos) 
+
+control_dnvs <- read.csv(file = "/home/leroy/Desktop/PROJECTS/CHD/intermediate_data/41588_2020_652_MOESM3_ESM_Controls_DNVs.csv",
+                         stringsAsFactors = F)
+colnames(control_dnvs)<-control_dnvs[1,]
+control_dnvs<-control_dnvs[2:nrow(control_dnvs),]
+control_dnvs$Pos <- as.numeric(control_dnvs$Pos) 
+
+```
+
+Read transcription factor motifs from JASPAR
+Test with GATA4 for now
+```{r}
+opts <- list()
+opts[["species"]] = 9606
+opts[["matrixtype"]] = "PWM"
+opts[["collection"]] = "CORE"
+matList <- getMatrixSet(JASPAR2018, opts)
+
+## Gata4 NOT returned by getMatrixSet -- Need to get full file and query in R for
+## more generality and completeness.
+
+
+gata4 <- getMatrixByID(JASPAR2018,"MA0482.1")
+tbx5 <- getMatrixByID(JASPAR2018,"MA0807.1")
+gata4_pwm <- PWM(gata4@profileMatrix)
+tbx5_pwm <- tbx5@profileMatrix
+
+
+```
+
+
+Scan de novos for those that cause deviation in motifs
+```{r}
+delta_max_tbx5 <- numeric(length = nrow(case_dnvs))
+df_tbx5 <- data.frame(max_ref = numeric(length = nrow(case_dnvs)),
+                       max_case = numeric(length = nrow(case_dnvs))
+                       )
+
+for(i in 1:nrow(case_dnvs)){
+  ## skip deletions and insertions for now
+  if(nchar(case_dnvs[i,]$Ref) != 1 | nchar(case_dnvs[i,]$Alt) != 1 ){next;}
+  
+  ## paste Left, case variant, Right
+  flank_dist <- 19  ## set flank distance 
+  left <- genome[[case_dnvs[i,]$Chrom]][(case_dnvs[i,]$Pos - flank_dist) : (case_dnvs[i,]$Pos-1)]
+  right <- genome[[case_dnvs[i,]$Chrom]][(case_dnvs[i,]$Pos + 1) : (case_dnvs[i,]$Pos + flank_dist)] 
+  temp_case_seq <- paste( left, case_dnvs[i,]$Alt, right, sep = "")
+  temp_ref_seq <- paste( left, case_dnvs[i,]$Ref, right , sep = "")
+  
+  temp_case_scores <- PWMscoreStartingAt(gata4_pwm, temp_case_seq, starting.at = 1: (nchar(temp_case_seq)-ncol(gata4_pwm)) )
+  temp_ref_scores <- PWMscoreStartingAt(gata4_pwm, temp_ref_seq, starting.at = 1: (nchar(temp_ref_seq)-ncol(gata4_pwm)) )
+  
+  df_gata4$max_ref[i] <- max(temp_ref_scores)
+  df_gata4$max_case[i] <- max(temp_case_scores)
+  
+  if(i%%1000 == 0){print(paste("i =",i))}
+}
+
+```
+
+```{r temp_plots_for_Monday_Meeting}
+plot(df_gata4$max_ref[df_gata4$max_ref > 0.9], df_gata4$max_case[df_gata4$max_ref > 0.9] )
+hist(df_gata4$max_ref[df_gata4$max_ref > 0.9])
+hist(df_gata4$max_ref-df_gata4$max_case)
+```
+
+
+
+```{r}
+
+## Data setup:
+data(HNF4alpha)
+library(BSgenome.Dmelanogaster.UCSC.dm3)
+chr3R <- Dmelanogaster$chr3R
+chr3R
+
+## Create a PWM from a PFM or directly from a rectangular
+## DNAStringSet object:
+pfm <- consensusMatrix(HNF4alpha)
+pwm <- PWM(pfm)  # same as 'PWM(HNF4alpha)'
+
+## Perform some general routines on the PWM:
+round(pwm, 2)
+maxWeights(pwm)
+maxScore(pwm)
+reverseComplement(pwm)
+
+## Score the first 5 positions:
+PWMscoreStartingAt(pwm, chr3R, starting.at=1:5)
+
+## Match the plus strand:
+hits <- matchPWM(pwm, chr3R)
+nhit <- countPWM(pwm, chr3R)  # same as 'length(hits)'
+
+## Use 'with.score=TRUE' to get the scores of the hits:
+hits <- matchPWM(pwm, chr3R, with.score=TRUE)
+head(mcols(hits)$score)
+min(mcols(hits)$score / maxScore(pwm))  # should be >= 0.8
+
+## The scores can also easily be post-calculated:
+scores <- PWMscoreStartingAt(pwm, subject(hits), start(hits))
+
+## Match the minus strand:
+matchPWM(reverseComplement(pwm), chr3R)
+```

@@ -88,7 +88,7 @@ levels(fps) <- c("no_cardiac_phenotype","mild","moderate","unassigned","severe" 
 fps
 patient_table$Severity <- fps
 
-
+write.csv(patient_table, paste(results_dir, date, "_participant_table_patient_subset_w_severity_annotation.csv", sep=""))
 
 
 ```
