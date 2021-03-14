@@ -10,7 +10,7 @@ library("Biostrings")
 library("TFBSTools")
 library("JASPAR2016")
 library("BSgenome.Hsapiens.UCSC.hg38")
-
+library(ggplot2)
 ```
 
 
@@ -46,6 +46,8 @@ matList <- getMatrixSet(JASPAR2018, opts)
 gata4 <- getMatrixByID(JASPAR2018,"MA0482.1")
 tbx5 <- getMatrixByID(JASPAR2018,"MA0807.1")
 gata4_pwm <- PWM(gata4@profileMatrix)
+
+## Tbx5 from Selex experiment, profile matrix incompatible with PWM command :(
 tbx5_pwm <- tbx5@profileMatrix
 
 
@@ -59,6 +61,8 @@ df_tbx5 <- data.frame(max_ref = numeric(length = nrow(case_dnvs)),
                        max_case = numeric(length = nrow(case_dnvs))
                        )
 
+
+### NEED TO CHECK REVERSE COMPLEMENT!!! ###
 for(i in 1:nrow(case_dnvs)){
   ## skip deletions and insertions for now
   if(nchar(case_dnvs[i,]$Ref) != 1 | nchar(case_dnvs[i,]$Alt) != 1 ){next;}
@@ -82,7 +86,153 @@ for(i in 1:nrow(case_dnvs)){
 ```
 
 ```{r temp_plots_for_Monday_Meeting}
+figure_dir <- "/home/leroy/Desktop/PROJECTS/CHD/figure/20200315_CHD_Meeting/"
+
+### example of choice for delta max value ###
+which <- which(df_gata4$max_ref > 0.9 & (df_gata4$max_ref -df_gata4$max_case)>0.1 )
+for(i in which[1:4]){
+  flank_dist <- 19  ## set flank distance 
+  left <- genome[[case_dnvs[i,]$Chrom]][(case_dnvs[i,]$Pos - flank_dist) : (case_dnvs[i,]$Pos-1)]
+  right <- genome[[case_dnvs[i,]$Chrom]][(case_dnvs[i,]$Pos + 1) : (case_dnvs[i,]$Pos + flank_dist)] 
+  temp_case_seq <- paste( left, case_dnvs[i,]$Alt, right, sep = "")
+  temp_ref_seq <- paste( left, case_dnvs[i,]$Ref, right , sep = "")
+  temp_case_scores <- PWMscoreStartingAt(gata4_pwm, temp_case_seq, starting.at = 1: (nchar(temp_case_seq)-ncol(gata4_pwm)) )
+  temp_ref_scores <- PWMscoreStartingAt(gata4_pwm, temp_ref_seq, starting.at = 1: (nchar(temp_ref_seq)-ncol(gata4_pwm)) )
+  
+  df <- data.frame(pos = 1:length(temp_case_scores), ref_score = temp_ref_scores, case_score = temp_case_scores)
+  gg <- ggplot(df, aes(x=ref_score, y=case_score))+
+    geom_point()+
+    ylim(0,1)+ xlim(0,1)+ 
+    geom_abline(intercept=0,slope=1)+
+    scale_x_continuous(limits = c(0,1), breaks=seq(0,1,0.1)) +
+    scale_y_continuous(limits = c(0,1), breaks=seq(0,1,0.1)) +
+    theme_bw()+
+    theme(axis.text=element_text(size=12, face="bold"),
+          axis.title=element_text(size=14, face="bold"))
+  plot(gg)
+  ggsave(filename = paste(figure_dir,"example_sequence_deviation_case_v_ref.png",sep = ""),
+         plot=gg,
+         device = "png",
+         width = 6,
+         height = 4,
+         dpi=250)
+  
+  df <- data.frame(pos = rep(c(1:length(temp_case_scores)),2 ),
+                   type = c(rep("case" ,length(temp_case_scores) ),rep("ref" ,length(temp_ref_scores) )),
+                   score = c(temp_case_scores, temp_ref_scores),
+                   charval = rep(unlist(strsplit(paste(left,"*",right,sep = ""), split="" ))[1: (nchar(temp_ref_seq)-ncol(gata4_pwm))],2) )
+  gg <- ggplot(df, aes(x=pos, y=score, color=type )) +
+    geom_point() +
+    ggtitle(paste("GATA4 TF deviation :",case_dnvs$Chrom[i],":",case_dnvs$Pos[i],":" ,case_dnvs$Ref[i],"->",case_dnvs$Alt[i],sep = " " )) +
+    geom_line(aes(group=pos)) +
+    scale_y_continuous(breaks=seq(0,1,0.1)) +
+    scale_x_continuous(breaks=1:length(df$charval), labels = df$charval)+
+    theme_bw()+
+    theme(axis.text=element_text(size=12, face="bold"),
+          axis.title=element_text(size=14, face="bold"))
+  plot(gg)  
+  
+  ggsave(filename = paste(figure_dir,"example_sequence_deviation_score.png",sep = ""),
+         plot=gg,
+         device = "png",
+         width = 6,
+         height = 4,
+         dpi=250)
+}
+  #############################################
+
+### distribution of deviations ###
+gg <- ggplot(df_gata4[which(df_gata4$max_ref>0.0),], aes(x=max_ref, y=max_case))+
+#  geom_density_2d_filled(alpha=0.5)+
+  ggtitle(paste("GATA4 TF deviations ref_score-case_score\n (single nucleotide changes only)" )) +
+  geom_point(alpha=0.1) +
+  #geom_density_2d(alpha=0.9) +
+#  scale_x_continuous(limits = c(0,1), breaks=seq(0,1,0.1)) +
+#  scale_y_continuous(limits = c(0,1), breaks=seq(0,1,0.1)) +
+  theme_bw()+
+  theme(axis.text=element_text(size=12, face="bold"),
+        axis.title=element_text(size=14, face="bold"))
+plot(gg)
+ggsave(filename = paste(figure_dir,"gata4_sequence_deviation_scores_gt.png",sep = ""),
+         plot=gg,
+         device = "png",
+         width = 6,
+         height = 6,
+         dpi=250)
+
+
+gg <- ggplot(df_gata4[which(df_gata4$max_ref>0.0),],
+             aes(x=max_ref-max_case))+
+  geom_histogram(bins = 100)+
+  theme_bw()+
+  theme(axis.text=element_text(size=12, face="bold"),
+        axis.title=element_text(size=14, face="bold"))
+plot(gg)  
+ggsave(filename = paste(figure_dir,"gata4_sequence_deviation_dist.png",sep = ""),
+         plot=gg,
+         device = "png",
+         width = 6,
+         height = 8,
+         dpi=250)
+
+
+## used for both ref and case
+gg <- ggplot(df_gata4[which(df_gata4$max_ref>0.0),],
+             aes(x=max_case))+
+  ggtitle("Max_TF scores: Case")+
+  geom_histogram(bins = 100)+
+  theme_bw()+
+  scale_x_continuous(breaks = seq(0,1,0.1))+
+  theme(axis.text=element_text(size=12, face="bold"),
+        axis.title=element_text(size=14, face="bold"))
+plot(gg)
+
+ggsave(filename = paste(figure_dir,"gata4_sequence_dist_case.png",sep = ""),
+         plot=gg,
+         device = "png",
+         width = 4,
+         height = 6,
+         dpi=250)
+
+## nucleotide freqs
+len <- length(which(case_dnvs$Ref=="T"))
+df <- data.frame(nt_freq=c(rep("A",length(which(case_dnvs$Ref=="A"))),
+                 rep("T",length(which(case_dnvs$Ref=="T"))),
+                 rep("C",length(which(case_dnvs$Ref=="C"))),
+                 rep("G",length(which(case_dnvs$Ref=="G"))),
+                 
+                 rep("A",length(which(case_dnvs$Alt=="A"))),
+                 rep("T",length(which(case_dnvs$Alt=="T"))),
+                 rep("C",length(which(case_dnvs$Alt=="C"))),
+                 rep("G",length(which(case_dnvs$Alt=="G")))
+                 ),
+                 nt_type=c(rep("ref",length(which(case_dnvs$Ref=="A"))),
+                 rep("ref",length(which(case_dnvs$Ref=="T"))),
+                 rep("ref",length(which(case_dnvs$Ref=="C"))),
+                 rep("ref",length(which(case_dnvs$Ref=="G"))),
+                 
+                 rep("case",length(which(case_dnvs$Alt=="A"))),
+                 rep("case",length(which(case_dnvs$Alt=="T"))),
+                 rep("case",length(which(case_dnvs$Alt=="C"))),
+                 rep("case",length(which(case_dnvs$Alt=="G")))
+                 ))
+df$nt_freq <- factor(df$nt_freq, levels = c("A","T","C","G") )
+gg<- ggplot(df, aes(x=nt_freq, fill=nt_type))+
+  geom_bar(position = "dodge")+
+  theme_bw()+
+  theme(axis.text=element_text(size=12, face="bold"),
+        axis.title=element_text(size=14, face="bold"))
+ggsave(filename = paste(figure_dir,"de_novo_nucleotides.png",sep = ""),
+         plot=gg,
+         device = "png",
+         width = 3,
+         height = 6,
+         dpi=250)
+
+
 plot(df_gata4$max_ref[df_gata4$max_ref > 0.9], df_gata4$max_case[df_gata4$max_ref > 0.9] )
+plot(df_gata4$max_ref, df_gata4$max_case )
+
 hist(df_gata4$max_ref[df_gata4$max_ref > 0.9])
 hist(df_gata4$max_ref-df_gata4$max_case)
 ```
