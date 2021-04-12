@@ -8,9 +8,10 @@ output: html_document
 
 library("Biostrings")
 library("TFBSTools")
-library("JASPAR2016")
+library("JASPAR2018")
 library("BSgenome.Hsapiens.UCSC.hg38")
 library(ggplot2)
+library("doParallel")
 ```
 
 
@@ -33,12 +34,14 @@ control_dnvs$Pos <- as.numeric(control_dnvs$Pos)
 Read transcription factor motifs from JASPAR
 Test with GATA4 for now
 ```{r}
-opts <- list()
-opts[["species"]] = 9606
-opts[["matrixtype"]] = "PWM"
-opts[["collection"]] = "CORE"
-matList <- getMatrixSet(JASPAR2018, opts)
 
+
+
+#opts <- list()
+#opts[["species"]] = 9606
+#opts[["matrixtype"]] = "PWM"
+#opts[["collection"]] = "CORE"
+#matList <- getMatrixSet(JASPAR2018, opts)
 ## Gata4 NOT returned by getMatrixSet -- Need to get full file and query in R for
 ## more generality and completeness.
 
@@ -50,14 +53,125 @@ gata4_pwm <- PWM(gata4@profileMatrix)
 ## Tbx5 from Selex experiment, profile matrix incompatible with PWM command :(
 tbx5_pwm <- tbx5@profileMatrix
 
+genome <- BSgenome.Hsapiens.UCSC.hg38
+```
 
+
+```{r general_TF_motif_analysis_w_variants}
+
+tf_list <- readJASPARMatrix("/home/leroy/Desktop/STABLE_DATA/TFBS_data/JASPAR2020_CORE_vertebrates_non-redundant_pfms_jaspar.txt")
+variants <- case_dnvs
+
+heart_tfs <- c("EOMES","MEIS1", "Isl1", "NKX2-5","TBX1", "TBX5", "GATA4", "GATA6","HAND2")
+tf_heart_sublist <- tf_list[heart_tfs]
+tf_list <- tf_heart_sublist
+
+genome <- BSgenome.Hsapiens.UCSC.hg38
+
+## set up variants to parallize over number of cores
+registerDoParallel(cores = max(detectCores()-1,1) )
+numCores <- getDoParWorkers()
+floor(nrow(case_dnvs) / numCores)
+
+
+
+variants_list <- split(variants, rep(1:numCores, each=ceiling(nrow(variants)/numCores), length.out=nrow(variants)))
+system.time(
+a<-foreach(el=1:length(variants_list)) %dopar% {
+      
+          variants_sub <- variants_list[[el]]
+          tfcolnames <- as.data.frame(matrix(nrow = nrow(variants_sub), ncol = length(tf_list)*2))
+          colnames(tfcolnames) <- paste(rep(names(tf_list),each=2), rep(c(":max_ref",":max_var"), length(tf_list)), sep = "")
+          variants_sub <- cbind(variants_sub, tfcolnames)
+          
+          for(i in 1:nrow(variants_sub)){
+            ## skip deletions and insertions for now
+            if(nchar(variants_sub[i,]$Ref) != 1 | nchar(variants_sub[i,]$Alt) != 1 ){next;}
+            
+            ## set flank distance to be at least as large as largest motif
+            flank_dist <- 1
+            for(tf in 1:length(tf_list)){if(ncol(tf_list[[tf]]@profileMatrix) > flank_dist){
+              flank_dist <- ncol(tf_list[[tf]]@profileMatrix)+2}
+            }
+            ## paste Left, case variant, Right
+            ## TO DO: NEED TO CHECK REVERSE STRAND
+            left <- genome[[variants_sub[i,]$Chrom]][(variants_sub[i,]$Pos - flank_dist) : (variants_sub[i,]$Pos-1)]
+            right <- genome[[variants_sub[i,]$Chrom]][(variants_sub[i,]$Pos + 1) : (variants_sub[i,]$Pos + flank_dist)] 
+            temp_var_seq <- paste( left, variants_sub[i,]$Alt, right, sep = "")
+            temp_ref_seq <- paste( left, variants_sub[i,]$Ref, right , sep = "")
+            
+            for(tf in 1:length(tf_list)){
+              tf_pwm <-toPWM(tf_list[[tf]]@profileMatrix, type = "prob")
+              
+              ## get tf name to access relevant columns of variant_sub to place output  
+              if(tf_list[[tf]]@name != names(tf_list)[tf]){
+                warning(paste("tf_names do not match:", tf_list[[tf]]@name," != ", names(tf_list)[tf] )) }
+              tf_name <- tf_list[[tf]]@name
+              
+              temp_var_scores <- PWMscoreStartingAt(tf_pwm, temp_var_seq, starting.at = 1: (nchar(temp_var_seq)-ncol(tf_pwm)) )
+              temp_ref_scores <- PWMscoreStartingAt(tf_pwm, temp_ref_seq, starting.at = 1: (nchar(temp_ref_seq)-ncol(tf_pwm)) )
+              
+              max_ref <- intersect(grep(tf_name, colnames(variants_sub)), grep("max_ref", colnames(variants_sub)) )
+              variants_sub[i,max_ref] <- max(temp_ref_scores) / maxScore(tf_pwm)
+              max_var <- intersect(grep(tf_name, colnames(variants_sub)), grep("max_var",colnames(variants_sub)) )
+              variants_sub[i,max_var] <- max(temp_var_scores) / maxScore(tf_pwm)
+
+            }
+            
+          }
+          variants_sub
+          
+}
+)
 ```
 
 
 Scan de novos for those that cause deviation in motifs
 ```{r}
-delta_max_tbx5 <- numeric(length = nrow(case_dnvs))
-df_tbx5 <- data.frame(max_ref = numeric(length = nrow(case_dnvs)),
+## set up variants to parallize over number of cores
+registerDoParallel(cores = max(detectCores()-1,1) )
+numCores <- getDoParWorkers()
+floor(nrow(case_dnvs) / numCores)
+
+### create sublists to run over in parallel ## number of cores should be large ~ 10 to (numVariants / ~1000)
+case_dnvs_list <- split(case_dnvs, rep(1:numCores, each=ceiling(nrow(case_dnvs)/numCores), length.out=nrow(case_dnvs)))
+
+mat <- matrix(nrow=1e3)
+system.time(
+    a<-foreach(el=1:length(case_dnvs_list)) %dopar% {
+          case_dnvs_sub <- case_dnvs_list[[el]]
+          df_gata4 <- data.frame(max_ref = numeric(length = nrow(case_dnvs_sub)),
+                                 max_case = numeric(length = nrow(case_dnvs_sub))
+                                 )
+          for(i in 1:nrow(case_dnvs_sub)){
+            ## skip deletions and insertions for now
+            if(nchar(case_dnvs_sub[i,]$Ref) != 1 | nchar(case_dnvs_sub[i,]$Alt) != 1 ){next;}
+            
+            ## paste Left, case variant, Right
+            flank_dist <- 19  ## set flank distance 
+            left <- genome[[case_dnvs_sub[i,]$Chrom]][(case_dnvs_sub[i,]$Pos - flank_dist) : (case_dnvs_sub[i,]$Pos-1)]
+            right <- genome[[case_dnvs_sub[i,]$Chrom]][(case_dnvs_sub[i,]$Pos + 1) : (case_dnvs_sub[i,]$Pos + flank_dist)] 
+            temp_case_seq <- paste( left, case_dnvs_sub[i,]$Alt, right, sep = "")
+            temp_ref_seq <- paste( left, case_dnvs_sub[i,]$Ref, right , sep = "")
+            
+            temp_case_scores <- PWMscoreStartingAt(gata4_pwm, temp_case_seq, starting.at = 1: (nchar(temp_case_seq)-ncol(gata4_pwm)) )
+            temp_ref_scores <- PWMscoreStartingAt(gata4_pwm, temp_ref_seq, starting.at = 1: (nchar(temp_ref_seq)-ncol(gata4_pwm)) )
+            
+            df_gata4$max_ref[i] <- max(temp_ref_scores)
+            df_gata4$max_case[i] <- max(temp_case_scores)
+            
+          }
+          df_gata4 <- cbind(case_dnvs_sub, df_gata4)
+          df_gata4 
+    }
+)
+
+stopImplicitCluster()
+
+
+
+
+df_gata4 <- data.frame(max_ref = numeric(length = nrow(case_dnvs)),
                        max_case = numeric(length = nrow(case_dnvs))
                        )
 
